@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tetris with Improved Advanced AI</title>
+    <style>
+      /* Grid container: 10 columns x 20 rows */
+      .grid {
+        width: 200px; /* 10 × 20px */
+        height: 400px; /* 20 × 20px */
+        display: flex;
+        flex-wrap: wrap;
+        background-color: black;
+        border: 2px solid #333;
+        margin: 0 auto 10px auto;
+      }
+      .grid div {
+        width: 20px;
+        height: 20px;
+        box-sizing: border-box;
+        border: 1px solid #222;
+      }
+      .tetromino {
+        background-color: white;
+      }
+      .taken {
+        background-color: grey;
+      }
+      body {
+        font-family: sans-serif;
+        text-align: center;
+        padding: 20px;
+      }
+      button {
+        margin: 5px;
+        padding: 5px 10px;
+        font-size: 1rem;
+      }
+    </style>
+  </head>
+  <body>
+    <h3>Score: <span id="score">0</span></h3>
+    <button id="start-button">Start/Pause</button>
+    <button id="ai-button">Enable Advanced AI</button>
+    <div class="grid"></div>
+
+    <script>
+      document.addEventListener("DOMContentLoaded", () => {
+        // -------------------------
+        // GAME SETUP & VARIABLES
+        // -------------------------
+        const grid = document.querySelector(".grid");
+        const ScoreDisplay = document.getElementById("score");
+        const StartBtn = document.getElementById("start-button");
+        const AIButton = document.getElementById("ai-button");
+        const width = 10;
+        let score = 0;
+        let timerId = null; // manual (gravity) timer
+        let aiTimerId = null; // AI command timer
+        let aiEnabled = false; // toggle for AI mode
+        let aiPlan = []; // planned moves for the current piece
+
+        // Create grid: 200 cells for 20 rows plus 10 extra "floor" cells that are always taken.
+        for (let i = 0; i < 200; i++) {
+          const square = document.createElement("div");
+          grid.appendChild(square);
+        }
+        for (let i = 0; i < width; i++) {
+          const square = document.createElement("div");
+          square.classList.add("taken");
+          grid.appendChild(square);
+        }
+        let squares = Array.from(document.querySelectorAll(".grid div"));
+
+        // -------------------------
+        // TETROMINO DEFINITIONS (L, Z, T, O)
+        // Each tetromino is defined by 4 rotations.
+        // Offsets are relative to a "current position" in the 1D grid.
+        // -------------------------
+        const lTetromino = [
+          [1, width + 1, width * 2 + 1, 2],
+          [width, width + 1, width + 2, width * 2 + 2],
+          [1, width + 1, width * 2 + 1, width * 2],
+          [width, width * 2, width * 2 + 1, width * 2 + 2],
+        ];
+        const zTetromino = [
+          [0, width, width + 1, width * 2 + 1],
+          [width + 1, width + 2, width * 2, width * 2 + 1],
+          [0, width, width + 1, width * 2 + 1],
+          [width + 1, width + 2, width * 2, width * 2 + 1],
+        ];
+        const tTetromino = [
+          [1, width, width + 1, width + 2],
+          [1, width + 1, width + 2, width * 2 + 1],
+          [width, width + 1, width + 2, width * 2 + 1],
+          [1, width, width + 1, width * 2 + 1],
+        ];
+        const oTetromino = [
+          [0, 1, width, width + 1],
+          [0, 1, width, width + 1],
+          [0, 1, width, width + 1],
+          [0, 1, width, width + 1],
+        ];
+        const theTetrominoes = [lTetromino, zTetromino, tTetromino, oTetromino];
+
+        // -------------------------
+        // CURRENT PIECE STATE
+        // -------------------------
+        let random = Math.floor(Math.random() * theTetrominoes.length);
+        let currentRot = 0;
+        let current = theTetrominoes[random][currentRot];
+        let currentPos = 4; // starting index
+
+        // -------------------------
+        // DRAW / UNDRAW FUNCTIONS
+        // -------------------------
+        function draw() {
+          current.forEach((index) => {
+            squares[currentPos + index].classList.add("tetromino");
+          });
+        }
+        function undraw() {
+          current.forEach((index) => {
+            squares[currentPos + index].classList.remove("tetromino");
+          });
+        }
+
+        // -------------------------
+        // MOVE DOWN & FREEZE LOGIC
+        // -------------------------
+        function moveDown() {
+          undraw();
+          currentPos += width;
+          draw();
+          freeze();
+        }
+        function freeze() {
+          if (
+            current.some((index) =>
+              squares[currentPos + index + width].classList.contains("taken")
+            )
+          ) {
+            current.forEach((index) =>
+              squares[currentPos + index].classList.add("taken")
+            );
+            addScore();
+            aiPlan = []; // clear AI plan when the piece lands
+
+            // Check for game over (if any block of new piece lands in top row)
+            if (
+              current.some(
+                (index) =>
+                  squares[currentPos + index].classList.contains("taken") &&
+                  currentPos < width
+              )
+            ) {
+              gameOver();
+              return;
+            }
+            // Spawn a new tetromino.
+            random = Math.floor(Math.random() * theTetrominoes.length);
+            currentRot = 0;
+            current = theTetrominoes[random][currentRot];
+            currentPos = 4;
+            draw();
+          }
+        }
+
+        // -------------------------
+        // MOVE LEFT / RIGHT / ROTATE / HARD DROP
+        // -------------------------
+        function moveLeft() {
+          undraw();
+          const isAtLeftEdge = current.some(
+            (index) => (currentPos + index) % width === 0
+          );
+          if (!isAtLeftEdge) currentPos -= 1;
+          if (
+            current.some((index) =>
+              squares[currentPos + index].classList.contains("taken")
+            )
+          ) {
+            currentPos += 1;
+          }
+          draw();
+        }
+        function moveRight() {
+          undraw();
+          const isAtRightEdge = current.some(
+            (index) => (currentPos + index) % width === width - 1
+          );
+          if (!isAtRightEdge) currentPos += 1;
+          if (
+            current.some((index) =>
+              squares[currentPos + index].classList.contains("taken")
+            )
+          ) {
+            currentPos -= 1;
+          }
+          draw();
+        }
+        function rotate() {
+          undraw();
+          currentRot = (currentRot + 1) % 4;
+          current = theTetrominoes[random][currentRot];
+          // Adjust position if piece goes off the grid
+          const isAtLeftEdge = current.some(
+            (index) => (currentPos + index) % width === 0
+          );
+          const isAtRightEdge = current.some(
+            (index) => (currentPos + index) % width === width - 1
+          );
+          if (isAtLeftEdge) currentPos += 1;
+          if (isAtRightEdge) currentPos -= 1;
+          draw();
+        }
+        function hardDrop() {
+          undraw();
+          while (
+            !current.some((index) =>
+              squares[currentPos + index + width].classList.contains("taken")
+            )
+          ) {
+            currentPos += width;
+          }
+          draw();
+          freeze();
+        }
+
+        // -------------------------
+        // SCORE & LINE CLEARING
+        // -------------------------
+        function addScore() {
+          for (let i = 0; i < 200; i += width) {
+            const row = [];
+            for (let j = i; j < i + width; j++) {
+              row.push(j);
+            }
+            if (
+              row.every((index) => squares[index].classList.contains("taken"))
+            ) {
+              score += 10;
+              ScoreDisplay.innerHTML = score;
+              row.forEach((index) => {
+                squares[index].classList.remove("taken");
+                squares[index].classList.remove("tetromino");
+              });
+              const removedSquares = squares.splice(i, width);
+              squares = removedSquares.concat(squares);
+              squares.forEach((cell) => grid.appendChild(cell));
+            }
+          }
+        }
+        function gameOver() {
+          clearInterval(timerId);
+          clearInterval(aiTimerId);
+          alert("Game Over!");
+        }
+
+        // -------------------------
+        // MANUAL CONTROLS (when AI is off)
+        // -------------------------
+        document.addEventListener("keyup", (e) => {
+          if (!aiEnabled) {
+            if (e.keyCode === 37) moveLeft();
+            else if (e.keyCode === 38) rotate();
+            else if (e.keyCode === 39) moveRight();
+            else if (e.keyCode === 40) moveDown();
+            else if (e.keyCode === 32) hardDrop(); // Space key for hard drop
+          }
+        });
+
+        // -------------------------
+        // SIMULATION FUNCTIONS (for AI)
+        // Board is represented as a 20×10 2D array (0 = empty, 1 = taken)
+        // -------------------------
+        function getBoardState() {
+          const board = [];
+          for (let r = 0; r < 20; r++) {
+            const row = [];
+            for (let c = 0; c < width; c++) {
+              const index = r * width + c;
+              row.push(squares[index].classList.contains("taken") ? 1 : 0);
+            }
+            board.push(row);
+          }
+          return board;
+        }
+        function collision(shape, candidateX, row, board) {
+          for (let offset of shape) {
+            const col = candidateX + (offset % width);
+            const r = row + Math.floor(offset / width);
+            if (col < 0 || col >= width || r >= board.length) return true;
+            if (board[r][col] === 1) return true;
+          }
+          return false;
+        }
+        function simulateLanding(shape, candidateX, board) {
+          let landingRow = 0;
+          while (true) {
+            if (collision(shape, candidateX, landingRow, board)) {
+              return landingRow === 0 ? null : landingRow - 1;
+            }
+            landingRow++;
+            if (landingRow >= board.length) return landingRow - 1;
+          }
+        }
+        function cloneBoard(board) {
+          return board.map((row) => row.slice());
+        }
+        function placePiece(board, shape, candidateX, landingRow) {
+          for (let offset of shape) {
+            const col = candidateX + (offset % width);
+            const r = landingRow + Math.floor(offset / width);
+            board[r][col] = 1;
+          }
+        }
+        function clearLinesSim(board) {
+          let linesCleared = 0;
+          for (let r = board.length - 1; r >= 0; r--) {
+            if (board[r].every((cell) => cell === 1)) {
+              linesCleared++;
+              board.splice(r, 1);
+              board.unshift(new Array(width).fill(0));
+              r++; // recheck same row index
+            }
+          }
+          return linesCleared;
+        }
+        // Improved evaluation function that now also penalizes “wells.”
+        function evaluateBoard(board, linesCleared) {
+          // Heavily penalize boards that have blocks in the top row.
+          if (board[0].some((cell) => cell === 1)) return -100000;
+          let aggregateHeight = 0;
+          let holes = 0;
+          let bumpiness = 0;
+          const heights = new Array(width).fill(0);
+          for (let col = 0; col < width; col++) {
+            for (let r = 0; r < board.length; r++) {
+              if (board[r][col] === 1) {
+                heights[col] = board.length - r;
+                break;
+              }
+            }
+            aggregateHeight += heights[col];
+          }
+          for (let col = 0; col < width; col++) {
+            let blockFound = false;
+            for (let r = 0; r < board.length; r++) {
+              if (board[r][col] === 1) blockFound = true;
+              else if (blockFound && board[r][col] === 0) holes++;
+            }
+          }
+          for (let col = 0; col < width - 1; col++) {
+            bumpiness += Math.abs(heights[col] - heights[col + 1]);
+          }
+          // Calculate wells – columns where both neighbors are higher (or boundaries)
+          let wellSum = 0;
+          for (let col = 0; col < width; col++) {
+            for (let r = 0; r < board.length; r++) {
+              if (board[r][col] === 0) {
+                if (
+                  (col === 0 || board[r][col - 1] === 1) &&
+                  (col === width - 1 || board[r][col + 1] === 1)
+                ) {
+                  let wellDepth = 1;
+                  let rBelow = r + 1;
+                  while (rBelow < board.length && board[rBelow][col] === 0) {
+                    wellDepth++;
+                    rBelow++;
+                  }
+                  wellSum += wellDepth;
+                }
+              }
+            }
+          }
+          // Heuristic weights (tweak these as desired)
+          const weightLines = 0.76066;
+          const weightHeight = 0.51066;
+          const weightHoles = 0.35663;
+          const weightBumpiness = 0.184483;
+          const weightWells = 0.5; // additional penalty for wells
+
+          return (
+            weightLines * linesCleared -
+            weightHeight * aggregateHeight -
+            weightHoles * holes -
+            weightBumpiness * bumpiness -
+            weightWells * wellSum
+          );
+        }
+
+        // -------------------------
+        // IMPROVED ADVANCED AI (2-lookahead over all next tetrominoes)
+        // -------------------------
+        function computeBestMoveAdvanced() {
+          const board = getBoardState();
+          let bestScore = -Infinity;
+          // Fallback: keep current rotation and x if no safe move is found.
+          let bestRotation = currentRot;
+          let bestX = currentPos % width;
+
+          // Get all rotations for the current tetromino.
+          const rotations = theTetrominoes[random];
+
+          for (let r = 0; r < rotations.length; r++) {
+            const shape = rotations[r];
+            const colOffsets = shape.map((offset) => offset % width);
+            const minOffset = Math.min(...colOffsets);
+            const maxOffset = Math.max(...colOffsets);
+            // Candidate horizontal positions.
+            for (
+              let candidateX = -minOffset;
+              candidateX <= width - 1 - maxOffset;
+              candidateX++
+            ) {
+              const landingRow = simulateLanding(shape, candidateX, board);
+              if (landingRow === null) continue;
+              // Clone board and simulate placing the current piece.
+              let boardAfter = cloneBoard(board);
+              placePiece(boardAfter, shape, candidateX, landingRow);
+              let linesCleared = clearLinesSim(boardAfter);
+              let currentEval = evaluateBoard(boardAfter, linesCleared);
+              // Lookahead: simulate placements for all possible next tetrominoes.
+              let expectedNextEval = 0;
+              for (let nextTetromino of theTetrominoes) {
+                let bestNextEvalForPiece = -Infinity;
+                for (let nr = 0; nr < nextTetromino.length; nr++) {
+                  const nextShape = nextTetromino[nr];
+                  const nextOffsets = nextShape.map((offset) => offset % width);
+                  const nextMinOffset = Math.min(...nextOffsets);
+                  const nextMaxOffset = Math.max(...nextOffsets);
+                  for (
+                    let nextCandidateX = -nextMinOffset;
+                    nextCandidateX <= width - 1 - nextMaxOffset;
+                    nextCandidateX++
+                  ) {
+                    const nextLandingRow = simulateLanding(
+                      nextShape,
+                      nextCandidateX,
+                      boardAfter
+                    );
+                    if (nextLandingRow === null) continue;
+                    let boardAfterNext = cloneBoard(boardAfter);
+                    placePiece(
+                      boardAfterNext,
+                      nextShape,
+                      nextCandidateX,
+                      nextLandingRow
+                    );
+                    let nextLinesCleared = clearLinesSim(boardAfterNext);
+                    let nextEval = evaluateBoard(
+                      boardAfterNext,
+                      nextLinesCleared
+                    );
+                    bestNextEvalForPiece = Math.max(
+                      bestNextEvalForPiece,
+                      nextEval
+                    );
+                  }
+                }
+                expectedNextEval += bestNextEvalForPiece;
+              }
+              // Average the evaluation over all possible next tetrominoes.
+              expectedNextEval /= theTetrominoes.length;
+
+              // Combine current and lookahead evaluations.
+              let combinedScore = currentEval + 0.5 * expectedNextEval;
+              if (combinedScore > bestScore) {
+                bestScore = combinedScore;
+                bestRotation = r;
+                bestX = candidateX;
+              }
+            }
+          }
+          return { rotation: bestRotation, x: bestX };
+        }
+
+        // Build a move plan (commands) to get from the current state to the target.
+        function computeMovePlan(targetRotation, targetX) {
+          const moves = [];
+          let rotationDiff = (targetRotation - currentRot + 4) % 4;
+          for (let i = 0; i < rotationDiff; i++) {
+            moves.push("rotate");
+          }
+          const currentX = currentPos % width;
+          let diff = targetX - currentX;
+          if (diff > 0) {
+            for (let i = 0; i < diff; i++) moves.push("right");
+          } else if (diff < 0) {
+            for (let i = 0; i < Math.abs(diff); i++) moves.push("left");
+          }
+          moves.push("drop");
+          return moves;
+        }
+
+        // AI move: if no plan exists, compute one; then execute one command.
+        function aiMoveAdvanced() {
+          if (aiPlan.length === 0) {
+            const best = computeBestMoveAdvanced();
+            aiPlan = computeMovePlan(best.rotation, best.x);
+          }
+          if (aiPlan.length > 0) {
+            const command = aiPlan.shift();
+            if (command === "rotate") rotate();
+            else if (command === "left") moveLeft();
+            else if (command === "right") moveRight();
+            else if (command === "drop") hardDrop();
+          }
+        }
+
+        // -------------------------
+        // START/PAUSE & AI TOGGLE
+        // -------------------------
+        StartBtn.addEventListener("click", () => {
+          if (timerId || aiTimerId) {
+            clearInterval(timerId);
+            clearInterval(aiTimerId);
+            timerId = null;
+            aiTimerId = null;
+          } else {
+            if (aiEnabled) {
+              // In AI mode, use a fast timer (50ms) so pieces drop quickly.
+              aiTimerId = setInterval(aiMoveAdvanced, 50);
+            } else {
+              timerId = setInterval(moveDown, 1000);
+            }
+          }
+        });
+        AIButton.addEventListener("click", () => {
+          aiEnabled = !aiEnabled;
+          AIButton.innerText = aiEnabled
+            ? "Disable Advanced AI"
+            : "Enable Advanced AI";
+          if (aiEnabled) {
+            if (timerId) {
+              clearInterval(timerId);
+              timerId = null;
+            }
+            if (!aiTimerId) aiTimerId = setInterval(aiMoveAdvanced, 50);
+          } else {
+            if (aiTimerId) {
+              clearInterval(aiTimerId);
+              aiTimerId = null;
+            }
+            if (!timerId) timerId = setInterval(moveDown, 1000);
+          }
+        });
+
+        // -------------------------
+        // INITIAL DRAW
+        // -------------------------
+        draw();
+      });
+    </script>
+  </body>
+</html>
